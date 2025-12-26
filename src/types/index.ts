@@ -31,6 +31,7 @@ export interface Agent {
   state: AgentState;
   targetX: number | null;
   targetY: number | null;
+  currentTask: Task | null;
 }
 
 // Selection state

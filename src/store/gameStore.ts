@@ -179,6 +179,7 @@ function createInitialAgent(map: Tile[][], gridWidth: number, gridHeight: number
     state: 'idle',
     targetX: null,
     targetY: null,
+    currentTask: null,
   };
 }
 
@@ -418,15 +419,13 @@ export const useGameStore = create<GameState>((set, get) => ({
             state: 'idle',
             targetX: null,
             targetY: null,
+            currentTask: null,
           };
           newAgents.push(newWorker);
           announce('A new visitor has arrived!');
         }
       }
     }
-
-    // Track current tasks being worked on by agents
-    const agentTasks: Map<string, Task> = new Map();
 
     // Update each agent
     newAgents = newAgents.map(agent => {
@@ -451,7 +450,7 @@ export const useGameStore = create<GameState>((set, get) => ({
             updatedAgent.targetX = nextTask.x;
             updatedAgent.targetY = nextTask.y;
             updatedAgent.state = 'moving';
-            agentTasks.set(updatedAgent.id, nextTask);
+            updatedAgent.currentTask = nextTask;
             newTaskQueue = newTaskQueue.slice(1);
           } else {
             // Task invalid, skip it
@@ -470,9 +469,7 @@ export const useGameStore = create<GameState>((set, get) => ({
 
       if (atTarget) {
         const targetTile = newMap[updatedAgent.targetY][updatedAgent.targetX];
-
-        // Find what task this agent was doing
-        const currentTask = agentTasks.get(updatedAgent.id);
+        const currentTask = updatedAgent.currentTask;
 
         if (targetTile.type === 'tree') {
           // Chopping
@@ -492,7 +489,7 @@ export const useGameStore = create<GameState>((set, get) => ({
 
         updatedAgent.targetX = null;
         updatedAgent.targetY = null;
-        agentTasks.delete(updatedAgent.id);
+        updatedAgent.currentTask = null;
       } else {
         updatedAgent.state = 'moving';
         const newPos = moveToward(
