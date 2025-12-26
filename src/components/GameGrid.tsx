@@ -52,6 +52,9 @@ export function GameGrid() {
     // Only start drag on left click and not in build mode
     if (e.button !== 0 || buildMode) return;
 
+    // Only start drag if clicking on the grid itself, not context menu etc.
+    if (!gridRef.current?.contains(e.target as Node)) return;
+
     const pos = getGridPosition(e.clientX, e.clientY);
     if (!pos) return;
 
