@@ -7,6 +7,14 @@ export const BLOCKING_TILES: TileType[] = ['wall', 'tree'];
 // Buildable tile types
 export const BUILDABLE_TYPES: TileType[] = ['wall', 'door', 'bed', 'fireplace'];
 
+// Build costs (in wood)
+export const BUILD_COSTS: Record<string, number> = {
+  wall: 1,
+  door: 10,
+  bed: 10,
+  fireplace: 10,
+};
+
 export interface Tile {
   type: TileType;
   x: number;
@@ -14,7 +22,7 @@ export interface Tile {
 }
 
 // Agent types
-export type AgentState = 'idle' | 'moving' | 'chopping';
+export type AgentState = 'idle' | 'moving' | 'chopping' | 'building';
 
 export interface Agent {
   id: string;
@@ -33,13 +41,14 @@ export interface Selection {
 }
 
 // Task queue
-export type TaskType = 'chop';
+export type TaskType = 'chop' | 'build';
 
 export interface Task {
   id: string;
   type: TaskType;
   x: number;
   y: number;
+  buildType?: TileType; // For build tasks
 }
 
 // Game constants

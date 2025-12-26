@@ -1,12 +1,24 @@
 import { create } from 'zustand';
 import type { Tile, Agent, TileType, Selection, Task } from '../types';
-import { TREE_DENSITY } from '../types';
+import { TREE_DENSITY, BUILD_COSTS } from '../types';
 
 // Tree propagation constants
 const PROPAGATION_INTERVAL = 100; // Every 100 ticks
 const BASE_PROPAGATION_CHANCE = 0.10; // 10% base chance
 const MAX_TREE_COVERAGE = 0.70; // 70% max coverage
 const PROPAGATION_RADIUS = 3; // Within 3 tiles
+
+// Worker spawning constants
+const WORKER_SPAWN_INTERVAL = 10; // Check every 10 ticks
+const WORKER_SPAWN_CHANCE = 0.10; // 10% chance
+const MAX_WORKERS = 2;
+
+// Announcement system
+export interface Announcement {
+  id: number;
+  message: string;
+  timestamp: number;
+}
 
 interface GameState {
   // Grid dimensions (computed from screen)
@@ -31,11 +43,16 @@ interface GameState {
 
   // Selection & context menu
   selection: Selection | null;
+  multiSelection: Tile[];
   contextMenuPos: { x: number; y: number } | null;
+  ignoreTileClicks: boolean;
 
   // Build mode
   buildMode: boolean;
   selectedBuildType: TileType | null;
+
+  // Announcements
+  announcements: Announcement[];
 
   // Actions
   initializeGame: (width: number, height: number) => void;
@@ -44,13 +61,21 @@ interface GameState {
   stopSimulation: () => void;
   toggleSimulation: () => void;
   selectTile: (x: number, y: number, screenX: number, screenY: number) => void;
+  setMultiSelection: (tiles: Tile[], screenX: number, screenY: number) => void;
   clearSelection: () => void;
   chopSelectedTree: () => void;
+  chopSelectedTrees: () => void;
   queueChopTask: (x: number, y: number) => void;
   isTaskQueued: (x: number, y: number) => boolean;
+  isTileInMultiSelection: (x: number, y: number) => boolean;
+  setIgnoreTileClicks: (ignore: boolean) => void;
   toggleBuildMode: () => void;
   selectBuildType: (type: TileType | null) => void;
   buildAt: (x: number, y: number) => void;
+  isBuildQueued: (x: number, y: number) => Task | undefined;
+  getBuildCost: (type: TileType) => number;
+  addAnnouncement: (message: string) => void;
+  clearOldAnnouncements: () => void;
 }
 
 // Generate the initial map with grass and random trees
@@ -200,17 +225,18 @@ function countTrees(map: Tile[][]): number {
 }
 
 // Propagate trees (called every PROPAGATION_INTERVAL ticks)
+// Returns { map, newTreeCount }
 function propagateTrees(
   map: Tile[][],
   gridWidth: number,
   gridHeight: number
-): Tile[][] {
+): { map: Tile[][]; newTreeCount: number } {
   const totalTiles = gridWidth * gridHeight;
   const treeCount = countTrees(map);
   const currentCoverage = treeCount / totalTiles;
 
   // No propagation if at or above max coverage
-  if (currentCoverage >= MAX_TREE_COVERAGE) return map;
+  if (currentCoverage >= MAX_TREE_COVERAGE) return { map, newTreeCount: 0 };
 
   // Scale probability: full chance at 0% coverage, 0 chance at MAX_TREE_COVERAGE
   const coverageRatio = currentCoverage / MAX_TREE_COVERAGE;
@@ -238,19 +264,67 @@ function propagateTrees(
   // Apply new trees to map (create new map to avoid mutation issues)
   if (newTrees.length > 0) {
     const newMap = map.map(row => row.map(tile => ({ ...tile })));
+    let actualNewTrees = 0;
     for (const { x, y } of newTrees) {
       // Double-check it's still grass (another tree might have spawned here)
       if (newMap[y][x].type === 'grass') {
         newMap[y][x].type = 'tree';
+        actualNewTrees++;
       }
     }
-    return newMap;
+    return { map: newMap, newTreeCount: actualNewTrees };
   }
 
-  return map;
+  return { map, newTreeCount: 0 };
 }
 
 let taskIdCounter = 0;
+let announcementIdCounter = 0;
+let workerIdCounter = 1; // Start at 1 since initial worker is agent-1
+
+// Find all fireplaces on the map
+function findFireplaces(map: Tile[][], gridWidth: number, gridHeight: number): { x: number; y: number }[] {
+  const fireplaces: { x: number; y: number }[] = [];
+  for (let y = 0; y < gridHeight; y++) {
+    for (let x = 0; x < gridWidth; x++) {
+      if (map[y][x].type === 'fireplace') {
+        fireplaces.push({ x, y });
+      }
+    }
+  }
+  return fireplaces;
+}
+
+// Find a valid spawn location near a fireplace (grass tile within 2 tiles)
+function findSpawnNearFireplace(
+  map: Tile[][],
+  fireplace: { x: number; y: number },
+  agents: Agent[],
+  gridWidth: number,
+  gridHeight: number
+): { x: number; y: number } | null {
+  const validSpots: { x: number; y: number }[] = [];
+
+  for (let dy = -2; dy <= 2; dy++) {
+    for (let dx = -2; dx <= 2; dx++) {
+      if (dx === 0 && dy === 0) continue;
+      const x = fireplace.x + dx;
+      const y = fireplace.y + dy;
+
+      if (x < 0 || x >= gridWidth || y < 0 || y >= gridHeight) continue;
+      if (map[y][x].type !== 'grass') continue;
+
+      // Check no agent is there
+      const occupied = agents.some(a => a.x === x && a.y === y);
+      if (occupied) continue;
+
+      validSpots.push({ x, y });
+    }
+  }
+
+  if (validSpots.length === 0) return null;
+  return validSpots[Math.floor(Math.random() * validSpots.length)];
+}
 
 export const useGameStore = create<GameState>((set, get) => ({
   gridWidth: 20,
@@ -262,14 +336,19 @@ export const useGameStore = create<GameState>((set, get) => ({
   tickCount: 0,
   isRunning: false,
   selection: null,
+  multiSelection: [],
   contextMenuPos: null,
+  ignoreTileClicks: false,
   buildMode: false,
   selectedBuildType: null,
+  announcements: [],
 
   initializeGame: (width: number, height: number) => {
     const map = generateMap(width, height);
     const agent = createInitialAgent(map, width, height);
     taskIdCounter = 0;
+    announcementIdCounter = 0;
+    workerIdCounter = 1;
 
     set({
       gridWidth: width,
@@ -281,42 +360,101 @@ export const useGameStore = create<GameState>((set, get) => ({
       tickCount: 0,
       isRunning: false,
       selection: null,
+      multiSelection: [],
       contextMenuPos: null,
+      ignoreTileClicks: false,
       buildMode: false,
       selectedBuildType: null,
+      announcements: [],
     });
   },
 
   tick: () => {
-    const { map, agents, taskQueue, wood, tickCount, isRunning, gridWidth, gridHeight } = get();
+    const { map, agents, taskQueue, wood, tickCount, isRunning, gridWidth, gridHeight, announcements } = get();
 
     if (!isRunning) return;
 
     let newMap = map.map(row => row.map(tile => ({ ...tile })));
     let newWood = wood;
     let newTaskQueue = [...taskQueue];
+    let newAgents = [...agents];
+    let newAnnouncements = [...announcements];
     const newTickCount = tickCount + 1;
+
+    // Helper to add announcement
+    const announce = (message: string) => {
+      newAnnouncements.push({
+        id: ++announcementIdCounter,
+        message,
+        timestamp: Date.now(),
+      });
+      // Keep only last 5 announcements
+      if (newAnnouncements.length > 5) {
+        newAnnouncements = newAnnouncements.slice(-5);
+      }
+    };
 
     // Tree propagation every PROPAGATION_INTERVAL ticks
     if (newTickCount % PROPAGATION_INTERVAL === 0) {
-      newMap = propagateTrees(newMap, gridWidth, gridHeight);
+      const result = propagateTrees(newMap, gridWidth, gridHeight);
+      newMap = result.map;
+      if (result.newTreeCount > 0) {
+        announce(`${result.newTreeCount} new tree${result.newTreeCount > 1 ? 's' : ''} grew`);
+      }
     }
 
-    const newAgents = agents.map(agent => {
+    // Worker spawning near fireplaces every WORKER_SPAWN_INTERVAL ticks
+    if (newTickCount % WORKER_SPAWN_INTERVAL === 0 && newAgents.length < MAX_WORKERS) {
+      const fireplaces = findFireplaces(newMap, gridWidth, gridHeight);
+      if (fireplaces.length > 0 && Math.random() < WORKER_SPAWN_CHANCE) {
+        // Pick a random fireplace
+        const fireplace = fireplaces[Math.floor(Math.random() * fireplaces.length)];
+        const spawnPos = findSpawnNearFireplace(newMap, fireplace, newAgents, gridWidth, gridHeight);
+        if (spawnPos) {
+          const newWorker: Agent = {
+            id: `agent-${++workerIdCounter}`,
+            x: spawnPos.x,
+            y: spawnPos.y,
+            state: 'idle',
+            targetX: null,
+            targetY: null,
+          };
+          newAgents.push(newWorker);
+          announce('A new visitor has arrived!');
+        }
+      }
+    }
+
+    // Track current tasks being worked on by agents
+    const agentTasks: Map<string, Task> = new Map();
+
+    // Update each agent
+    newAgents = newAgents.map(agent => {
       const updatedAgent = { ...agent };
 
       // If agent has no target, pick up next task from queue
       if (updatedAgent.targetX === null || updatedAgent.targetY === null) {
         if (newTaskQueue.length > 0) {
           const nextTask = newTaskQueue[0];
-          // Check if the task target is still valid (tree still exists)
-          if (newMap[nextTask.y]?.[nextTask.x]?.type === 'tree') {
+
+          // Validate task is still valid
+          let taskValid = false;
+          if (nextTask.type === 'chop') {
+            taskValid = newMap[nextTask.y]?.[nextTask.x]?.type === 'tree';
+          } else if (nextTask.type === 'build') {
+            // Build task valid if tile is grass and we can afford it
+            const cost = BUILD_COSTS[nextTask.buildType || ''] || 0;
+            taskValid = newMap[nextTask.y]?.[nextTask.x]?.type === 'grass' && newWood >= cost;
+          }
+
+          if (taskValid) {
             updatedAgent.targetX = nextTask.x;
             updatedAgent.targetY = nextTask.y;
             updatedAgent.state = 'moving';
-            newTaskQueue = newTaskQueue.slice(1); // Remove from queue
+            agentTasks.set(updatedAgent.id, nextTask);
+            newTaskQueue = newTaskQueue.slice(1);
           } else {
-            // Tree is gone, skip this task
+            // Task invalid, skip it
             newTaskQueue = newTaskQueue.slice(1);
           }
         } else {
@@ -325,20 +463,36 @@ export const useGameStore = create<GameState>((set, get) => ({
         return updatedAgent;
       }
 
-      // Move or chop
+      // Move or work
       const atTarget =
         updatedAgent.x === updatedAgent.targetX &&
         updatedAgent.y === updatedAgent.targetY;
 
       if (atTarget) {
-        if (newMap[updatedAgent.targetY][updatedAgent.targetX].type === 'tree') {
+        const targetTile = newMap[updatedAgent.targetY][updatedAgent.targetX];
+
+        // Find what task this agent was doing
+        const currentTask = agentTasks.get(updatedAgent.id);
+
+        if (targetTile.type === 'tree') {
+          // Chopping
           updatedAgent.state = 'chopping';
           newMap[updatedAgent.targetY][updatedAgent.targetX].type = 'grass';
           newWood += 1;
+        } else if (currentTask?.type === 'build' && currentTask.buildType && targetTile.type === 'grass') {
+          // Building
+          const cost = BUILD_COSTS[currentTask.buildType] || 0;
+          if (newWood >= cost) {
+            updatedAgent.state = 'building';
+            newMap[updatedAgent.targetY][updatedAgent.targetX].type = currentTask.buildType;
+            newWood -= cost;
+            announce(`Built ${currentTask.buildType}`);
+          }
         }
+
         updatedAgent.targetX = null;
         updatedAgent.targetY = null;
-        // Don't set to idle yet - let next tick pick up new task
+        agentTasks.delete(updatedAgent.id);
       } else {
         updatedAgent.state = 'moving';
         const newPos = moveToward(
@@ -363,6 +517,7 @@ export const useGameStore = create<GameState>((set, get) => ({
       taskQueue: newTaskQueue,
       wood: newWood,
       tickCount: newTickCount,
+      announcements: newAnnouncements,
     });
   },
 
@@ -376,13 +531,22 @@ export const useGameStore = create<GameState>((set, get) => ({
       const tile = map[y][x];
       set({
         selection: { x, y, tile },
+        multiSelection: [],
         contextMenuPos: { x: screenX, y: screenY },
       });
     }
   },
 
+  setMultiSelection: (tiles: Tile[], screenX: number, screenY: number) => {
+    set({
+      selection: null,
+      multiSelection: tiles,
+      contextMenuPos: tiles.length > 0 ? { x: screenX, y: screenY } : null,
+    });
+  },
+
   clearSelection: () => {
-    set({ selection: null, contextMenuPos: null });
+    set({ selection: null, multiSelection: [], contextMenuPos: null });
   },
 
   chopSelectedTree: () => {
@@ -390,7 +554,16 @@ export const useGameStore = create<GameState>((set, get) => ({
     if (selection && selection.tile.type === 'tree') {
       get().queueChopTask(selection.x, selection.y);
     }
-    set({ selection: null, contextMenuPos: null });
+    set({ selection: null, multiSelection: [], contextMenuPos: null });
+  },
+
+  chopSelectedTrees: () => {
+    const { multiSelection } = get();
+    const trees = multiSelection.filter(tile => tile.type === 'tree');
+    for (const tree of trees) {
+      get().queueChopTask(tree.x, tree.y);
+    }
+    set({ selection: null, multiSelection: [], contextMenuPos: null });
   },
 
   queueChopTask: (x: number, y: number) => {
@@ -424,6 +597,15 @@ export const useGameStore = create<GameState>((set, get) => ({
     return inQueue || agentTargeting;
   },
 
+  isTileInMultiSelection: (x: number, y: number) => {
+    const { multiSelection } = get();
+    return multiSelection.some(tile => tile.x === x && tile.y === y);
+  },
+
+  setIgnoreTileClicks: (ignore: boolean) => {
+    set({ ignoreTileClicks: ignore });
+  },
+
   toggleBuildMode: () => {
     set(state => ({
       buildMode: !state.buildMode,
@@ -438,21 +620,65 @@ export const useGameStore = create<GameState>((set, get) => ({
   },
 
   buildAt: (x: number, y: number) => {
-    const { map, selectedBuildType, agents } = get();
+    const { map, selectedBuildType, taskQueue, wood } = get();
 
     if (!selectedBuildType) return;
 
     // Can only build on grass
     if (map[y]?.[x]?.type !== 'grass') return;
 
-    // Can't build where agent is standing
-    const agentHere = agents.some(agent => agent.x === x && agent.y === y);
-    if (agentHere) return;
+    // Check if already queued for build at this location
+    const alreadyQueued = taskQueue.some(task => task.x === x && task.y === y);
+    if (alreadyQueued) return;
 
-    // Build the structure
-    const newMap = map.map(row => row.map(tile => ({ ...tile })));
-    newMap[y][x].type = selectedBuildType;
+    // Check if we have enough wood
+    const cost = BUILD_COSTS[selectedBuildType] || 0;
+    if (wood < cost) return; // Not enough wood
 
-    set({ map: newMap });
+    // Queue the build task
+    const newTask: Task = {
+      id: `task-${++taskIdCounter}`,
+      type: 'build',
+      x,
+      y,
+      buildType: selectedBuildType,
+    };
+
+    set({ taskQueue: [...taskQueue, newTask] });
+  },
+
+  isBuildQueued: (x: number, y: number) => {
+    const { taskQueue } = get();
+    // Check if there's a build task in queue for this location
+    const inQueue = taskQueue.find(task => task.type === 'build' && task.x === x && task.y === y);
+    if (inQueue) return inQueue;
+    return undefined;
+  },
+
+  getBuildCost: (type: TileType) => {
+    return BUILD_COSTS[type] || 0;
+  },
+
+  addAnnouncement: (message: string) => {
+    const { announcements } = get();
+    const newAnnouncement: Announcement = {
+      id: ++announcementIdCounter,
+      message,
+      timestamp: Date.now(),
+    };
+    let newAnnouncements = [...announcements, newAnnouncement];
+    if (newAnnouncements.length > 5) {
+      newAnnouncements = newAnnouncements.slice(-5);
+    }
+    set({ announcements: newAnnouncements });
+  },
+
+  clearOldAnnouncements: () => {
+    const { announcements } = get();
+    const now = Date.now();
+    const filtered = announcements.filter(a => now - a.timestamp < 5000);
+    if (filtered.length !== announcements.length) {
+      set({ announcements: filtered });
+    }
   },
 }));

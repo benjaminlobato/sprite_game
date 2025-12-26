@@ -1,13 +1,36 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useMemo } from 'react';
 import { useGameStore } from '../store/gameStore';
 
 export function ContextMenu() {
   const selection = useGameStore(state => state.selection);
+  const multiSelection = useGameStore(state => state.multiSelection);
   const contextMenuPos = useGameStore(state => state.contextMenuPos);
   const clearSelection = useGameStore(state => state.clearSelection);
   const chopSelectedTree = useGameStore(state => state.chopSelectedTree);
+  const chopSelectedTrees = useGameStore(state => state.chopSelectedTrees);
   const isTaskQueued = useGameStore(state => state.isTaskQueued);
   const menuRef = useRef<HTMLDivElement>(null);
+
+  // Analyze multi-selection
+  const multiSelectionStats = useMemo(() => {
+    if (multiSelection.length === 0) return null;
+
+    const typeCounts: Record<string, number> = {};
+    let choppableTrees = 0;
+
+    for (const tile of multiSelection) {
+      typeCounts[tile.type] = (typeCounts[tile.type] || 0) + 1;
+      if (tile.type === 'tree' && !isTaskQueued(tile.x, tile.y)) {
+        choppableTrees++;
+      }
+    }
+
+    return {
+      total: multiSelection.length,
+      typeCounts,
+      choppableTrees,
+    };
+  }, [multiSelection, isTaskQueued]);
 
   // Close on click outside
   useEffect(() => {
@@ -32,7 +55,13 @@ export function ContextMenu() {
     };
   }, [clearSelection]);
 
-  if (!selection || !contextMenuPos) {
+  // Nothing to show
+  if (!contextMenuPos) {
+    return null;
+  }
+
+  // No selection at all
+  if (!selection && multiSelection.length === 0) {
     return null;
   }
 
@@ -42,6 +71,45 @@ export function ContextMenu() {
     top: contextMenuPos.y,
     zIndex: 100,
   };
+
+  // Multi-selection mode
+  if (multiSelection.length > 0 && multiSelectionStats) {
+    const typeList = Object.entries(multiSelectionStats.typeCounts)
+      .map(([type, count]) => `${count} ${type}${count > 1 ? 's' : ''}`)
+      .join(', ');
+
+    return (
+      <div ref={menuRef} className="context-menu" style={style}>
+        <div className="context-menu-header">
+          <span className="context-menu-icon">
+            <span className="multi-select-icon">☐</span>
+          </span>
+          <span className="context-menu-title">
+            {multiSelectionStats.total} tiles
+          </span>
+        </div>
+        <div className="context-menu-types">
+          {typeList}
+        </div>
+        <div className="context-menu-divider" />
+        <div className="context-menu-actions">
+          {multiSelectionStats.choppableTrees > 0 ? (
+            <button className="context-menu-btn" onClick={chopSelectedTrees}>
+              <span className="btn-icon">⚒</span>
+              Chop {multiSelectionStats.choppableTrees} tree{multiSelectionStats.choppableTrees > 1 ? 's' : ''}
+            </button>
+          ) : (
+            <div className="context-menu-empty">No choppable trees selected</div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // Single selection mode
+  if (!selection) {
+    return null;
+  }
 
   const tileType = selection.tile.type;
   const isTree = tileType === 'tree';

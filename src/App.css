@@ -106,6 +106,14 @@
 
 .game-grid {
   background-color: #1a1a2e;
+  user-select: none;
+}
+
+/* Selection rectangle */
+.selection-rect {
+  background-color: rgba(78, 205, 196, 0.2);
+  border: 2px solid #4ecdc4;
+  z-index: 100;
 }
 
 /* Tile styles */
@@ -166,6 +174,13 @@
   z-index: 5;
 }
 
+.tile-multi-selected {
+  outline: 2px solid #4ecdc4;
+  outline-offset: -2px;
+  filter: brightness(1.2);
+  z-index: 4;
+}
+
 .tile-icon {
   filter: drop-shadow(1px 1px 1px rgba(0, 0, 0, 0.3));
   pointer-events: none;
@@ -176,6 +191,26 @@
   height: 32px;
   image-rendering: pixelated;
   pointer-events: none;
+}
+
+.tile-ghost {
+  position: absolute;
+  opacity: 0.4;
+  filter: saturate(0.5);
+  animation: ghostPulse 1.5s ease-in-out infinite;
+}
+
+@keyframes ghostPulse {
+  0%, 100% {
+    opacity: 0.3;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.tile-build-queued {
+  position: relative;
 }
 
 .tile-queued {
@@ -328,6 +363,17 @@
   font-family: monospace;
 }
 
+.context-menu-types {
+  padding: 0.25rem 1rem 0.5rem;
+  font-size: 0.75rem;
+  color: #a0a0a0;
+}
+
+.multi-select-icon {
+  font-size: 1.2rem;
+  color: #4ecdc4;
+}
+
 .context-menu-divider {
   height: 1px;
   background: linear-gradient(90deg, transparent, #0f3460, transparent);
@@ -456,4 +502,71 @@
 .build-option-label {
   font-size: 0.7rem;
   color: #a0a0a0;
+}
+
+.build-option-cost {
+  font-size: 0.65rem;
+  color: #4ecdc4;
+  font-weight: bold;
+}
+
+.build-option-cost::before {
+  content: '';
+  margin-right: 2px;
+}
+
+.build-option-cost.insufficient {
+  color: #e94560;
+}
+
+.build-option.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.build-option.disabled:hover {
+  background: #0f3460;
+}
+
+/* Announcements */
+.announcements {
+  position: fixed;
+  top: 70px;
+  right: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  pointer-events: none;
+  z-index: 40;
+}
+
+.announcement {
+  background: rgba(22, 33, 62, 0.9);
+  border-left: 3px solid #4ecdc4;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0 4px 4px 0;
+  font-size: 0.8rem;
+  color: #e0e0e0;
+  animation: slideIn 0.3s ease-out, fadeOut 0.5s ease-in 4.5s forwards;
+  max-width: 200px;
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes fadeOut {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
 }

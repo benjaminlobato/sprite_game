@@ -1,5 +1,6 @@
 import { useGameStore } from '../store/gameStore';
 import type { TileType } from '../types';
+import { BUILD_COSTS } from '../types';
 
 const BUILD_OPTIONS: { type: TileType; label: string; icon: string }[] = [
   { type: 'wall', label: 'Wall', icon: '/sprites/wall.png' },
@@ -13,6 +14,7 @@ export function BuildPanel() {
   const selectedBuildType = useGameStore(state => state.selectedBuildType);
   const selectBuildType = useGameStore(state => state.selectBuildType);
   const toggleBuildMode = useGameStore(state => state.toggleBuildMode);
+  const wood = useGameStore(state => state.wood);
 
   if (!buildMode) return null;
 
@@ -23,16 +25,21 @@ export function BuildPanel() {
         <button className="build-close" onClick={toggleBuildMode}>✕</button>
       </div>
       <div className="build-options">
-        {BUILD_OPTIONS.map(option => (
-          <button
-            key={option.type}
-            className={`build-option ${selectedBuildType === option.type ? 'selected' : ''}`}
-            onClick={() => selectBuildType(option.type)}
-          >
-            <img src={option.icon} alt={option.label} className="build-option-icon" />
-            <span className="build-option-label">{option.label}</span>
-          </button>
-        ))}
+        {BUILD_OPTIONS.map(option => {
+          const cost = BUILD_COSTS[option.type] || 0;
+          const canAfford = wood >= cost;
+          return (
+            <button
+              key={option.type}
+              className={`build-option ${selectedBuildType === option.type ? 'selected' : ''} ${!canAfford ? 'disabled' : ''}`}
+              onClick={() => selectBuildType(option.type)}
+            >
+              <img src={option.icon} alt={option.label} className="build-option-icon" />
+              <span className="build-option-label">{option.label}</span>
+              <span className={`build-option-cost ${!canAfford ? 'insufficient' : ''}`}>{cost}</span>
+            </button>
+          );
+        })}
       </div>
     </div>
   );
