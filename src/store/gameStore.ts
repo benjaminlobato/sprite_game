@@ -99,64 +99,77 @@ function isBlocking(map: Tile[][], x: number, y: number, gridWidth: number, grid
   if (x < 0 || x >= gridWidth || y < 0 || y >= gridHeight) return true;
   const tile = map[y]?.[x];
   if (!tile) return true;
-  // Trees don't block - agent needs to reach them to chop
-  // Only walls block
   return tile.type === 'wall';
 }
 
-// Move one step toward target, avoiding blocking tiles
-function moveToward(
-  currentX: number,
-  currentY: number,
+// BFS pathfinding - returns the next step toward target, or null if no path
+function findPath(
+  startX: number,
+  startY: number,
   targetX: number,
   targetY: number,
   map: Tile[][],
   gridWidth: number,
   gridHeight: number
-): { x: number; y: number } {
-  // Try horizontal movement first
-  if (currentX < targetX) {
-    if (!isBlocking(map, currentX + 1, currentY, gridWidth, gridHeight)) {
-      return { x: currentX + 1, y: currentY };
-    }
-  } else if (currentX > targetX) {
-    if (!isBlocking(map, currentX - 1, currentY, gridWidth, gridHeight)) {
-      return { x: currentX - 1, y: currentY };
-    }
+): { x: number; y: number } | null {
+  // If already at target
+  if (startX === targetX && startY === targetY) {
+    return { x: startX, y: startY };
   }
 
-  // Try vertical movement
-  if (currentY < targetY) {
-    if (!isBlocking(map, currentX, currentY + 1, gridWidth, gridHeight)) {
-      return { x: currentX, y: currentY + 1 };
-    }
-  } else if (currentY > targetY) {
-    if (!isBlocking(map, currentX, currentY - 1, gridWidth, gridHeight)) {
-      return { x: currentX, y: currentY - 1 };
-    }
-  }
+  const key = (x: number, y: number) => `${x},${y}`;
+  const visited = new Set<string>();
+  const cameFrom = new Map<string, { x: number; y: number }>();
+  const queue: Array<{ x: number; y: number }> = [{ x: startX, y: startY }];
+  visited.add(key(startX, startY));
 
-  // Try alternate directions if primary is blocked
   const directions = [
-    { dx: 1, dy: 0 }, { dx: -1, dy: 0 },
-    { dx: 0, dy: 1 }, { dx: 0, dy: -1 }
+    { dx: 0, dy: -1 }, { dx: 0, dy: 1 },
+    { dx: -1, dy: 0 }, { dx: 1, dy: 0 }
   ];
 
-  for (const { dx, dy } of directions) {
-    const newX = currentX + dx;
-    const newY = currentY + dy;
-    if (!isBlocking(map, newX, newY, gridWidth, gridHeight)) {
-      // Check if this moves us closer to target
-      const currentDist = Math.abs(targetX - currentX) + Math.abs(targetY - currentY);
-      const newDist = Math.abs(targetX - newX) + Math.abs(targetY - newY);
-      if (newDist < currentDist) {
-        return { x: newX, y: newY };
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+
+    for (const { dx, dy } of directions) {
+      const nx = current.x + dx;
+      const ny = current.y + dy;
+      const nkey = key(nx, ny);
+
+      // Skip if already visited
+      if (visited.has(nkey)) continue;
+
+      // Skip if out of bounds
+      if (nx < 0 || nx >= gridWidth || ny < 0 || ny >= gridHeight) continue;
+
+      // Check if this is the target
+      const isTarget = nx === targetX && ny === targetY;
+
+      // Block walls (but allow target tile even if it has something on it)
+      if (!isTarget && isBlocking(map, nx, ny, gridWidth, gridHeight)) continue;
+
+      visited.add(nkey);
+      cameFrom.set(nkey, { x: current.x, y: current.y });
+
+      // Found target - reconstruct path
+      if (isTarget) {
+        let curr = { x: nx, y: ny };
+        while (cameFrom.has(key(curr.x, curr.y))) {
+          const prev = cameFrom.get(key(curr.x, curr.y))!;
+          if (prev.x === startX && prev.y === startY) {
+            return curr; // Return first step
+          }
+          curr = prev;
+        }
+        return curr;
       }
+
+      queue.push({ x: nx, y: ny });
     }
   }
 
-  // Can't move - stuck
-  return { x: currentX, y: currentY };
+  // No path found
+  return null;
 }
 
 // Create a single starting agent in a random grass tile
@@ -431,40 +444,63 @@ export const useGameStore = create<GameState>((set, get) => ({
     newAgents = newAgents.map(agent => {
       const updatedAgent = { ...agent };
 
-      // If agent has no target, pick up next task from queue
+      // If agent has no target, pick up closest valid task from queue
       if (updatedAgent.targetX === null || updatedAgent.targetY === null) {
         if (newTaskQueue.length > 0) {
-          const nextTask = newTaskQueue[0];
+          // Find the closest valid task
+          let bestTask: Task | null = null;
+          let bestDistance = Infinity;
+          let bestIndex = -1;
+          const invalidIndices: number[] = [];
+          const unaffordableIndices: number[] = [];
 
-          // Validate task is still valid
-          let taskValid = false;
-          if (nextTask.type === 'chop') {
-            taskValid = newMap[nextTask.y]?.[nextTask.x]?.type === 'tree';
-          } else if (nextTask.type === 'build') {
-            // Build task valid if tile is grass and we can afford it
-            const cost = BUILD_COSTS[nextTask.buildType || ''] || 0;
-            taskValid = newMap[nextTask.y]?.[nextTask.x]?.type === 'grass' && newWood >= cost;
+          for (let i = 0; i < newTaskQueue.length; i++) {
+            const task = newTaskQueue[i];
+            let taskValid = false;
+
+            if (task.type === 'chop') {
+              taskValid = newMap[task.y]?.[task.x]?.type === 'tree';
+            } else if (task.type === 'build') {
+              const cost = BUILD_COSTS[task.buildType || ''] || 0;
+              const tileIsGrass = newMap[task.y]?.[task.x]?.type === 'grass';
+              if (tileIsGrass && newWood >= cost) {
+                taskValid = true;
+              } else if (tileIsGrass) {
+                // Can't afford - mark for moving to back
+                unaffordableIndices.push(i);
+              } else {
+                // Tile changed - mark for removal
+                invalidIndices.push(i);
+              }
+            }
+
+            if (!taskValid && task.type === 'chop') {
+              invalidIndices.push(i);
+            }
+
+            if (taskValid) {
+              const dist = Math.abs(task.x - updatedAgent.x) + Math.abs(task.y - updatedAgent.y);
+              if (dist < bestDistance) {
+                bestDistance = dist;
+                bestTask = task;
+                bestIndex = i;
+              }
+            }
           }
 
-          if (taskValid) {
-            updatedAgent.targetX = nextTask.x;
-            updatedAgent.targetY = nextTask.y;
+          if (bestTask && bestIndex >= 0) {
+            updatedAgent.targetX = bestTask.x;
+            updatedAgent.targetY = bestTask.y;
             updatedAgent.state = 'moving';
-            updatedAgent.currentTask = nextTask;
-            newTaskQueue = newTaskQueue.slice(1);
+            updatedAgent.currentTask = bestTask;
+            // Remove the picked task from queue
+            newTaskQueue = newTaskQueue.filter((_, i) => i !== bestIndex);
           } else {
-            // Check if task is just unaffordable (move to back) vs truly invalid (remove)
-            const tileStillValid = nextTask.type === 'build'
-              ? newMap[nextTask.y]?.[nextTask.x]?.type === 'grass'
-              : newMap[nextTask.y]?.[nextTask.x]?.type === 'tree';
-
-            if (tileStillValid && nextTask.type === 'build') {
-              // Can't afford yet - move to back of queue
-              newTaskQueue = [...newTaskQueue.slice(1), nextTask];
-            } else {
-              // Task is truly invalid (tile changed) - remove it
-              newTaskQueue = newTaskQueue.slice(1);
-            }
+            // No valid task found - clean up invalid ones, move unaffordable to back
+            const validTasks = newTaskQueue.filter((_, i) => !invalidIndices.includes(i) && !unaffordableIndices.includes(i));
+            const unaffordableTasks = newTaskQueue.filter((_, i) => unaffordableIndices.includes(i));
+            newTaskQueue = [...validTasks, ...unaffordableTasks];
+            updatedAgent.state = 'idle';
           }
         } else {
           updatedAgent.state = 'idle';
@@ -501,8 +537,8 @@ export const useGameStore = create<GameState>((set, get) => ({
         updatedAgent.targetY = null;
         updatedAgent.currentTask = null;
       } else {
-        updatedAgent.state = 'moving';
-        const newPos = moveToward(
+        // Find path to target
+        const nextStep = findPath(
           updatedAgent.x,
           updatedAgent.y,
           updatedAgent.targetX,
@@ -511,8 +547,21 @@ export const useGameStore = create<GameState>((set, get) => ({
           gridWidth,
           gridHeight
         );
-        updatedAgent.x = newPos.x;
-        updatedAgent.y = newPos.y;
+
+        if (nextStep && (nextStep.x !== updatedAgent.x || nextStep.y !== updatedAgent.y)) {
+          updatedAgent.state = 'moving';
+          updatedAgent.x = nextStep.x;
+          updatedAgent.y = nextStep.y;
+        } else {
+          // No path found - agent is stuck, abandon task and put it back in queue
+          if (updatedAgent.currentTask) {
+            newTaskQueue = [...newTaskQueue, updatedAgent.currentTask];
+          }
+          updatedAgent.targetX = null;
+          updatedAgent.targetY = null;
+          updatedAgent.currentTask = null;
+          updatedAgent.state = 'idle';
+        }
       }
 
       return updatedAgent;
