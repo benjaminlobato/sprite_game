@@ -460,22 +460,19 @@ export const useGameStore = create<GameState>((set, get) => ({
 
             if (task.type === 'chop') {
               taskValid = newMap[task.y]?.[task.x]?.type === 'tree';
-            } else if (task.type === 'build') {
-              const cost = BUILD_COSTS[task.buildType || ''] || 0;
-              const tileIsGrass = newMap[task.y]?.[task.x]?.type === 'grass';
-              if (tileIsGrass && newWood >= cost) {
-                taskValid = true;
-              } else if (tileIsGrass) {
-                // Can't afford - mark for moving to back
-                unaffordableIndices.push(i);
-              } else {
-                // Tile changed - mark for removal
+              if (!taskValid) {
                 invalidIndices.push(i);
               }
-            }
-
-            if (!taskValid && task.type === 'chop') {
-              invalidIndices.push(i);
+            } else if (task.type === 'build') {
+              const tileIsGrass = newMap[task.y]?.[task.x]?.type === 'grass';
+              if (tileIsGrass) {
+                taskValid = true; // Cost already paid when queued
+              } else {
+                // Tile changed - mark for removal and refund
+                invalidIndices.push(i);
+                const refund = BUILD_COSTS[task.buildType || ''] || 0;
+                newWood += refund;
+              }
             }
 
             if (taskValid) {
@@ -523,14 +520,10 @@ export const useGameStore = create<GameState>((set, get) => ({
           newMap[updatedAgent.targetY][updatedAgent.targetX].type = 'grass';
           newWood += 1;
         } else if (currentTask?.type === 'build' && currentTask.buildType && targetTile.type === 'grass') {
-          // Building
-          const cost = BUILD_COSTS[currentTask.buildType] || 0;
-          if (newWood >= cost) {
-            updatedAgent.state = 'building';
-            newMap[updatedAgent.targetY][updatedAgent.targetX].type = currentTask.buildType;
-            newWood -= cost;
-            announce(`Built ${currentTask.buildType}`);
-          }
+          // Building - cost already paid when queued
+          updatedAgent.state = 'building';
+          newMap[updatedAgent.targetY][updatedAgent.targetX].type = currentTask.buildType;
+          announce(`Built ${currentTask.buildType}`);
         }
 
         updatedAgent.targetX = null;
@@ -553,9 +546,16 @@ export const useGameStore = create<GameState>((set, get) => ({
           updatedAgent.x = nextStep.x;
           updatedAgent.y = nextStep.y;
         } else {
-          // No path found - agent is stuck, abandon task and put it back in queue
+          // No path found - agent is stuck, abandon task
           if (updatedAgent.currentTask) {
-            newTaskQueue = [...newTaskQueue, updatedAgent.currentTask];
+            if (updatedAgent.currentTask.type === 'build') {
+              // Refund build cost since we can't complete it
+              const refund = BUILD_COSTS[updatedAgent.currentTask.buildType || ''] || 0;
+              newWood += refund;
+            } else {
+              // Chop tasks go back in queue
+              newTaskQueue = [...newTaskQueue, updatedAgent.currentTask];
+            }
           }
           updatedAgent.targetX = null;
           updatedAgent.targetY = null;
@@ -691,7 +691,7 @@ export const useGameStore = create<GameState>((set, get) => ({
     const cost = BUILD_COSTS[selectedBuildType] || 0;
     if (wood < cost) return; // Not enough wood
 
-    // Queue the build task
+    // Queue the build task and deduct cost immediately
     const newTask: Task = {
       id: `task-${++taskIdCounter}`,
       type: 'build',
@@ -700,7 +700,10 @@ export const useGameStore = create<GameState>((set, get) => ({
       buildType: selectedBuildType,
     };
 
-    set({ taskQueue: [...taskQueue, newTask] });
+    set({
+      taskQueue: [...taskQueue, newTask],
+      wood: wood - cost,
+    });
   },
 
   isBuildQueued: (x: number, y: number) => {
