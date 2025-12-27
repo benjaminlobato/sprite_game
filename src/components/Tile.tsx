@@ -1,5 +1,6 @@
 import type { Tile as TileType } from '../types';
 import { useGameStore } from '../store/gameStore';
+import { BUILD_COSTS } from '../types';
 
 interface TileProps {
   tile: TileType;
@@ -21,6 +22,8 @@ export function Tile({ tile }: TileProps) {
   const isTileInMultiSelection = useGameStore(state => state.isTileInMultiSelection);
   const ignoreTileClicks = useGameStore(state => state.ignoreTileClicks);
   const buildMode = useGameStore(state => state.buildMode);
+  const selectedBuildType = useGameStore(state => state.selectedBuildType);
+  const wood = useGameStore(state => state.wood);
   const buildAt = useGameStore(state => state.buildAt);
 
   const isSelected = selection?.x === tile.x && selection?.y === tile.y;
@@ -29,12 +32,16 @@ export function Tile({ tile }: TileProps) {
   const buildTask = isBuildQueued(tile.x, tile.y);
   const hasBuildQueued = !!buildTask;
 
+  // Check if we can afford the selected build type
+  const buildCost = selectedBuildType ? (BUILD_COSTS[selectedBuildType] || 0) : 0;
+  const canAffordBuild = wood >= buildCost;
+
   let tileClass = `tile tile-${tile.type}`;
   if (isSelected) tileClass += ' tile-selected';
   if (isMultiSelected) tileClass += ' tile-multi-selected';
   if (isChopQueued) tileClass += ' tile-queued';
   if (hasBuildQueued) tileClass += ' tile-build-queued';
-  if (buildMode && tile.type === 'grass' && !hasBuildQueued) tileClass += ' tile-buildable';
+  if (buildMode && tile.type === 'grass' && !hasBuildQueued && canAffordBuild) tileClass += ' tile-buildable';
 
   const handleClick = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -43,7 +50,10 @@ export function Tile({ tile }: TileProps) {
     if (ignoreTileClicks) return;
 
     if (buildMode) {
-      buildAt(tile.x, tile.y);
+      // Only allow building if we can afford it
+      if (canAffordBuild) {
+        buildAt(tile.x, tile.y);
+      }
     } else {
       selectTile(tile.x, tile.y, e.clientX, e.clientY);
     }

@@ -32,7 +32,8 @@ export function BuildPanel() {
             <button
               key={option.type}
               className={`build-option ${selectedBuildType === option.type ? 'selected' : ''} ${!canAfford ? 'disabled' : ''}`}
-              onClick={() => selectBuildType(option.type)}
+              onClick={() => canAfford && selectBuildType(option.type)}
+              disabled={!canAfford}
             >
               <img src={option.icon} alt={option.label} className="build-option-icon" />
               <span className="build-option-label">{option.label}</span>
