@@ -453,8 +453,18 @@ export const useGameStore = create<GameState>((set, get) => ({
             updatedAgent.currentTask = nextTask;
             newTaskQueue = newTaskQueue.slice(1);
           } else {
-            // Task invalid, skip it
-            newTaskQueue = newTaskQueue.slice(1);
+            // Check if task is just unaffordable (move to back) vs truly invalid (remove)
+            const tileStillValid = nextTask.type === 'build'
+              ? newMap[nextTask.y]?.[nextTask.x]?.type === 'grass'
+              : newMap[nextTask.y]?.[nextTask.x]?.type === 'tree';
+
+            if (tileStillValid && nextTask.type === 'build') {
+              // Can't afford yet - move to back of queue
+              newTaskQueue = [...newTaskQueue.slice(1), nextTask];
+            } else {
+              // Task is truly invalid (tile changed) - remove it
+              newTaskQueue = newTaskQueue.slice(1);
+            }
           }
         } else {
           updatedAgent.state = 'idle';
