@@ -98,12 +98,17 @@ function generateMap(width: number, height: number): Tile[][] {
   return map;
 }
 
-// Check if a tile blocks movement
+// Check if a tile blocks movement (walls only)
 function isBlocking(map: Tile[][], x: number, y: number, gridWidth: number, gridHeight: number): boolean {
   if (x < 0 || x >= gridWidth || y < 0 || y >= gridHeight) return true;
   const tile = map[y]?.[x];
   if (!tile) return true;
   return tile.type === 'wall';
+}
+
+// Check if a tile blocks warmth (walls and doors)
+function blocksWarmth(tileType: TileType): boolean {
+  return tileType === 'wall' || tileType === 'door';
 }
 
 // BFS pathfinding - returns the next step toward target, or null if no path
@@ -351,8 +356,8 @@ function calculateWarmTiles(
             if (visited.has(nkey)) continue;
             if (nx < 0 || nx >= gridWidth || ny < 0 || ny >= gridHeight) continue;
 
-            // Walls block warmth
-            if (map[ny][nx].type === 'wall') continue;
+            // Walls and doors block warmth
+            if (blocksWarmth(map[ny][nx].type)) continue;
 
             visited.add(nkey);
             queue.push({ x: nx, y: ny, dist: current.dist + 1 });
