@@ -518,7 +518,7 @@ export const useGameStore = create<GameState>((set, get) => ({
           // Chopping
           updatedAgent.state = 'chopping';
           newMap[updatedAgent.targetY][updatedAgent.targetX].type = 'grass';
-          newWood += 1;
+          newWood += 10;
         } else if (currentTask?.type === 'build' && currentTask.buildType && targetTile.type === 'grass') {
           // Building - cost already paid when queued
           updatedAgent.state = 'building';
