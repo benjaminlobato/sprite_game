@@ -26,17 +26,21 @@ export function Tile({ tile }: TileProps) {
   const wood = useGameStore(state => state.wood);
   const buildAt = useGameStore(state => state.buildAt);
 
+  const isTileWarm = useGameStore(state => state.isTileWarm);
+
   const isSelected = selection?.x === tile.x && selection?.y === tile.y;
   const isMultiSelected = isTileInMultiSelection(tile.x, tile.y);
   const isChopQueued = tile.type === 'tree' && isTaskQueued(tile.x, tile.y);
   const buildTask = isBuildQueued(tile.x, tile.y);
   const hasBuildQueued = !!buildTask;
+  const isWarm = isTileWarm(tile.x, tile.y);
 
   // Check if we can afford the selected build type
   const buildCost = selectedBuildType ? (BUILD_COSTS[selectedBuildType] || 0) : 0;
   const canAffordBuild = wood >= buildCost;
 
   let tileClass = `tile tile-${tile.type}`;
+  if (isWarm) tileClass += ' tile-warm';
   if (isSelected) tileClass += ' tile-selected';
   if (isMultiSelected) tileClass += ' tile-multi-selected';
   if (isChopQueued) tileClass += ' tile-queued';

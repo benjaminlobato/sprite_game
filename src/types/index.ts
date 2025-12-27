@@ -32,7 +32,11 @@ export interface Agent {
   targetX: number | null;
   targetY: number | null;
   currentTask: Task | null;
+  isWarm: boolean;
 }
+
+// Warmth constants
+export const WARMTH_RADIUS = 6;
 
 // Selection state
 export interface Selection {

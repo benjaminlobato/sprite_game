@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import type { Tile, Agent, TileType, Selection, Task } from '../types';
-import { TREE_DENSITY, BUILD_COSTS } from '../types';
+import { TREE_DENSITY, BUILD_COSTS, WARMTH_RADIUS } from '../types';
 
 // Tree propagation constants
 const PROPAGATION_INTERVAL = 100; // Every 100 ticks
@@ -54,6 +54,9 @@ interface GameState {
   // Announcements
   announcements: Announcement[];
 
+  // Warmth
+  warmTiles: Set<string>;
+
   // Actions
   initializeGame: (width: number, height: number) => void;
   tick: () => void;
@@ -74,6 +77,7 @@ interface GameState {
   buildAt: (x: number, y: number) => void;
   isBuildQueued: (x: number, y: number) => Task | undefined;
   getBuildCost: (type: TileType) => number;
+  isTileWarm: (x: number, y: number) => boolean;
   addAnnouncement: (message: string) => void;
   clearOldAnnouncements: () => void;
 }
@@ -193,6 +197,7 @@ function createInitialAgent(map: Tile[][], gridWidth: number, gridHeight: number
     targetX: null,
     targetY: null,
     currentTask: null,
+    isWarm: false,
   };
 }
 
@@ -309,6 +314,57 @@ function findFireplaces(map: Tile[][], gridWidth: number, gridHeight: number): {
   return fireplaces;
 }
 
+// Calculate warm tiles using flood fill from fireplaces (stops at walls)
+function calculateWarmTiles(
+  map: Tile[][],
+  gridWidth: number,
+  gridHeight: number
+): Set<string> {
+  const warmTiles = new Set<string>();
+  const key = (x: number, y: number) => `${x},${y}`;
+
+  // Find all fireplaces
+  for (let y = 0; y < gridHeight; y++) {
+    for (let x = 0; x < gridWidth; x++) {
+      if (map[y][x].type === 'fireplace') {
+        // BFS from this fireplace
+        const visited = new Set<string>();
+        const queue: Array<{ x: number; y: number; dist: number }> = [{ x, y, dist: 0 }];
+        visited.add(key(x, y));
+
+        while (queue.length > 0) {
+          const current = queue.shift()!;
+          warmTiles.add(key(current.x, current.y));
+
+          if (current.dist >= WARMTH_RADIUS) continue;
+
+          const directions = [
+            { dx: 0, dy: -1 }, { dx: 0, dy: 1 },
+            { dx: -1, dy: 0 }, { dx: 1, dy: 0 }
+          ];
+
+          for (const { dx, dy } of directions) {
+            const nx = current.x + dx;
+            const ny = current.y + dy;
+            const nkey = key(nx, ny);
+
+            if (visited.has(nkey)) continue;
+            if (nx < 0 || nx >= gridWidth || ny < 0 || ny >= gridHeight) continue;
+
+            // Walls block warmth
+            if (map[ny][nx].type === 'wall') continue;
+
+            visited.add(nkey);
+            queue.push({ x: nx, y: ny, dist: current.dist + 1 });
+          }
+        }
+      }
+    }
+  }
+
+  return warmTiles;
+}
+
 // Find a valid spawn location near a fireplace (grass tile within 2 tiles)
 function findSpawnNearFireplace(
   map: Tile[][],
@@ -356,6 +412,7 @@ export const useGameStore = create<GameState>((set, get) => ({
   buildMode: false,
   selectedBuildType: null,
   announcements: [],
+  warmTiles: new Set(),
 
   initializeGame: (width: number, height: number) => {
     const map = generateMap(width, height);
@@ -433,6 +490,7 @@ export const useGameStore = create<GameState>((set, get) => ({
             targetX: null,
             targetY: null,
             currentTask: null,
+            isWarm: false,
           };
           newAgents.push(newWorker);
           announce('A new visitor has arrived!');
@@ -567,6 +625,16 @@ export const useGameStore = create<GameState>((set, get) => ({
       return updatedAgent;
     });
 
+    // Calculate warm tiles
+    const newWarmTiles = calculateWarmTiles(newMap, gridWidth, gridHeight);
+
+    // Update agent warmth status
+    const warmKey = (x: number, y: number) => `${x},${y}`;
+    newAgents = newAgents.map(agent => ({
+      ...agent,
+      isWarm: newWarmTiles.has(warmKey(agent.x, agent.y)),
+    }));
+
     set({
       map: newMap,
       agents: newAgents,
@@ -574,6 +642,7 @@ export const useGameStore = create<GameState>((set, get) => ({
       wood: newWood,
       tickCount: newTickCount,
       announcements: newAnnouncements,
+      warmTiles: newWarmTiles,
     });
   },
 
@@ -716,6 +785,11 @@ export const useGameStore = create<GameState>((set, get) => ({
 
   getBuildCost: (type: TileType) => {
     return BUILD_COSTS[type] || 0;
+  },
+
+  isTileWarm: (x: number, y: number) => {
+    const { warmTiles } = get();
+    return warmTiles.has(`${x},${y}`);
   },
 
   addAnnouncement: (message: string) => {

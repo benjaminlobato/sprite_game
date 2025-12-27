@@ -20,11 +20,12 @@ export function Agent({ agent }: AgentProps) {
     zIndex: 10,
   };
 
-  const agentClass = `agent agent-${agent.state}`;
+  const agentClass = `agent agent-${agent.state} ${agent.isWarm ? 'agent-warm' : ''}`;
 
   return (
     <div className={agentClass} style={style}>
       <img src="/sprites/worker.png" alt="worker" className="agent-sprite" />
+      {agent.isWarm && <span className="agent-warm-indicator">*</span>}
     </div>
   );
 }
